@@ -548,6 +548,7 @@ class BaseControl:
 
     #Odom Timer call this to get velocity and imu info and convert to odom topic
     def timerOdomCB(self,event):
+        
         #Get move base velocity data
         if self.movebase_firmware_version[1] == 0: 
             #old version firmware have no version info and not support new command below
