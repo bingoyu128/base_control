@@ -113,11 +113,16 @@ class BaseControl:
         #define param
         self.current_time = rospy.Time.now()
         self.previous_time = self.current_time
+       
+        # bingo start
+        self.init_encode_a = False
         self.current_encode_a = 0
         self.previous_encode_a = 0
-        # bingo start
+
+        self.init_encode_b = False
         self.current_encode_b = 0
         self.previous_encode_b = 0
+
         self.sum_encode_a = 0
         self.sum_encode_b = 0
         self.odom_x = 0
@@ -196,7 +201,7 @@ class BaseControl:
                 self.timer_sonar = rospy.Timer(rospy.Duration(100.0/1000),self.timerSonarCB)
 
         self.tf_broadcaster = tf.TransformBroadcaster()
-        self.timer_odom = rospy.Timer(rospy.Duration(1.0/self.odom_freq),self.timerOdomCB2)
+        # self.timer_odom = rospy.Timer(rospy.Duration(1.0/50),self.timerOdomCB2)
         # self.timer_battery = rospy.Timer(rospy.Duration(1.0/self.battery_freq),self.timerBatteryCB)  
         self.timer_communication = rospy.Timer(rospy.Duration(1.0/200),self.timerCommunicationCB)
 
@@ -252,7 +257,7 @@ class BaseControl:
         self.rotat_z = data.angular.z
         self.last_cmd_vel_time = rospy.Time.now()
         
-        # rospy.loginfo("%f,%f,%f",data.linear.x,data.linear.y,data.angular.z)
+        rospy.loginfo("%f,%f,%f",data.linear.x,data.linear.y,data.angular.z)
         R = 0.085
         round = 2 * math.pi * R
 
@@ -418,14 +423,18 @@ class BaseControl:
                        
                         
                         encode = np.int32(((databuf[12]&0xff)<<24)|((databuf[11]&0xff)<<16)|((databuf[10]&0xff)<<8)|(databuf[9]&0xff))
+                        
                         self.current_encode_a = encode
-                        self.diff_encode_a = (self.previous_encode_a - self.current_encode_a)
-                        self.previous_encode_a = self.current_encode_a
-                        if -50 < self.diff_encode_a < 50:
-                            self.sum_encode_a += self.diff_encode_a
+                        if self.init_encode_a == True:
+                            self.diff_encode_a = (self.previous_encode_a - self.current_encode_a)
+                            self.previous_encode_a = self.current_encode_a
+                            if -50 < self.diff_encode_a < 50:
+                                self.sum_encode_a += self.diff_encode_a
+                            else:
+                                print('diff=',self.diff_encode_a)
                         else:
-                            print('diff=',self.diff_encode_a)
-
+                            self.previous_encode_a = self.current_encode_a
+                            self.init_encode_a = True
                         # print('encode_a=', diff_encode,self.sum_encode_a)
                     elif databuf[1] == 0x40 and databuf[0] == 0x30:
                         rpm = np.int32(((databuf[8]&0xff)<<24)|((databuf[7]&0xff)<<16)|((databuf[6]&0xff)<<8)|(databuf[5]&0xff))
@@ -433,22 +442,28 @@ class BaseControl:
                         # print('v2=',rpm)
 
                         encode = np.int32(((databuf[12]&0xff)<<24)|((databuf[11]&0xff)<<16)|((databuf[10]&0xff)<<8)|(databuf[9]&0xff))
+
                         self.current_encode_b = encode
-                        self.diff_encode_b = (self.current_encode_b - self.previous_encode_b)
-                        self.previous_encode_b = self.current_encode_b
-                        if -50 < self.diff_encode_b < 50:
-                            self.sum_encode_b += self.diff_encode_b
-                        angle = ((self.sum_encode_b - self.sum_encode_a) / 4096) * 180 * 0.17 / 0.38
-                        angle = angle % 360
-                        # rad = rad * 180 / math.pi
-                        self.yaw_angle = angle
-                        d = ((self.diff_encode_a + self.diff_encode_b)/2/4096)*math.pi*0.17
-                        rad = angle * math.pi /180 
-                        self.odom_x += d*math.cos(rad)
-                        self.odom_y += d*math.sin(rad)
-                        # print('encode_b=', self.diff_encode_b ,'==',self.sum_encode_b, '--' , self.sum_encode_a, 'ODOM', 'X=',round(self.odom_x,2) , 'Y=',round(self.odom_y,2),'angle=',round(angle,2))
-                        
-                        
+
+                        if self.init_encode_b == True:
+                            self.diff_encode_b = (self.current_encode_b - self.previous_encode_b)
+                            self.previous_encode_b = self.current_encode_b
+                            if -50 < self.diff_encode_b < 50:
+                                self.sum_encode_b += self.diff_encode_b
+
+                            angle = ((self.sum_encode_b - self.sum_encode_a) / 4096) * 180 * 0.17 / 0.38
+                            angle = angle % 360
+                            # rad = rad * 180 / math.pi
+                            self.yaw_angle = angle
+                            d = ((self.diff_encode_a + self.diff_encode_b)/2/4096)*math.pi*0.17
+                            rad = angle * math.pi /180 
+                            
+                            self.odom_x += d*math.cos(rad)
+                            self.odom_y += d*math.sin(rad)
+                            print('encode_b=', self.diff_encode_b ,'==',self.sum_encode_b, '--' , self.sum_encode_a, 'ODOM', 'X=',round(self.odom_x,2) , 'Y=',round(self.odom_y,2),'angle=',round(angle,2))
+                        else:
+                            self.previous_encode_b = self.current_encode_b
+                            self.init_encode_b = True
                     else:
                          print("data error")
                 else:
@@ -548,7 +563,6 @@ class BaseControl:
 
     #Odom Timer call this to get velocity and imu info and convert to odom topic
     def timerOdomCB(self,event):
-        
         #Get move base velocity data
         if self.movebase_firmware_version[1] == 0: 
             #old version firmware have no version info and not support new command below
@@ -600,39 +614,11 @@ class BaseControl:
     
     def timerOdomCB2(self,event):
         #Get move base velocity data
-        if self.movebase_firmware_version[1] == 0: 
-            #old version firmware have no version info and not support new command below
-            output = chr(0x5a) + chr(0x06) + chr(0x01) + chr(0x09) + chr(0x00) + chr(0x38) #0x38 is CRC-8 value
-        else:
-            #in firmware version new than v1.1.0,support this command      
-            output = chr(0x5a) + chr(0x06) + chr(0x01) + chr(0x11) + chr(0x00) + chr(0xa2) 
-        while(self.serialIDLE_flag):
-            time.sleep(0.01)
-        self.serialIDLE_flag = 1
-        try:
-            while self.serial.out_waiting:
-                pass
-            self.serial.write(output)
-        except:
-            rospy.logerr("Odom Command Send Faild")
-        self.serialIDLE_flag = 0   
-        #calculate odom data
-        Vx = float(ctypes.c_int16(self.Vx).value/1000.0)
-        Vy = float(ctypes.c_int16(self.Vy).value/1000.0)
-        Vyaw = float(ctypes.c_int16(self.Vyaw).value/1000.0)
-
-        self.pose_yaw = float(ctypes.c_int16(self.Yawz).value/100.0)
-        self.pose_yaw = self.pose_yaw*math.pi/180.0
   
         self.current_time = rospy.Time.now()
-        dt = (self.current_time - self.previous_time).to_sec()
-        self.previous_time = self.current_time
-        self.pose_x = self.pose_x + Vx * (math.cos(self.pose_yaw))*dt - Vy * (math.sin(self.pose_yaw))*dt
-        self.pose_y = self.pose_y + Vx * (math.sin(self.pose_yaw))*dt + Vy * (math.cos(self.pose_yaw))*dt
-
-        # self.odom_x
-        # slef.odom_y
-        pose_quat = tf.transformations.quaternion_from_euler(0,0,self.yaw_angle)        
+        print('tf',self.odom_x,self.odom_y)
+        pose_quat_zero = tf.transformations.quaternion_from_euler(0,0,0) 
+        pose_quat = tf.transformations.quaternion_from_euler(0,0,self.yaw_angle*math.pi /180.0)        
         msg = Odometry()
         msg.header.stamp = self.current_time
         msg.header.frame_id = self.odomId
@@ -644,11 +630,14 @@ class BaseControl:
         msg.pose.pose.orientation.y = pose_quat[1]
         msg.pose.pose.orientation.z = pose_quat[2]
         msg.pose.pose.orientation.w = pose_quat[3]
-        msg.twist.twist.linear.x = 0
-        msg.twist.twist.linear.y = 0
-        msg.twist.twist.angular.z = 0
+        msg.twist.twist.linear.x = 0.0
+        msg.twist.twist.linear.y = 0.0
+        msg.twist.twist.angular.z = 0.0
         self.pub.publish(msg)
-        self.tf_broadcaster.sendTransform((self.pose_x,self.pose_y,0.0),pose_quat,self.current_time,self.baseId,self.odomId)
+        self.tf_broadcaster.sendTransform((self.odom_x,self.odom_y,0.0),pose_quat,self.current_time,self.baseId,self.odomId)
+        self.tf_broadcaster.sendTransform((0.0,0.0,0.0),pose_quat_zero,self.current_time,'base_link',self.baseId)
+        self.tf_broadcaster.sendTransform((0.24,0.0,0.0),pose_quat_zero,self.current_time,'laser_link','base_link')
+
     
     #Battery Timer callback function to get battery info
     def timerBatteryCB(self,event):
